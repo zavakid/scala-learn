@@ -1,7 +1,8 @@
 package com.zavakid.scala.learn.akka
 
-import akka.actor.{ActorSelection, Props, ActorSystem, Actor}
+import akka.actor._
 import com.typesafe.config.ConfigFactory
+import scala.concurrent.duration._
 
 /**
  * author: luwu luwu@mogujie.com
@@ -10,31 +11,45 @@ import com.typesafe.config.ConfigFactory
 object Commands {
 
   case object AreYouAlive
+
   case object ImHere
-  case object FindTarget
+
   case object StartWork
+
+  case object FindTarget
+
 }
 
 class SourceActor extends Actor {
 
-  private var target: ActorSelection = _
+  private val identifyId = 1
 
   import Commands._
-
   override def receive: Actor.Receive = {
     case StartWork =>
-      target = context.system.actorSelection("akka.tcp://targetSystem@127.0.0.1:2553/user/targetActor")
-      context.become(askTarget)
-
-      import scala.concurrent.duration._
+      val target = context.system.actorSelection("akka.tcp://targetSystem@127.0.0.1:2553/user/targetActor")
+      target ! Identify(identifyId)
+    case ActorIdentity(`identifyId`, Some(ref)) =>
+      println("find target!")
+      context.watch(ref)
+      context.become(active(ref))
       import context.dispatcher
-      val myself = context.self
-      context.system.scheduler.schedule(1 second, 1 second, myself, FindTarget)
+      context.system.scheduler.schedule(1 second, 1 second, self, FindTarget)
+
+    case ActorIdentity(`identifyId`, None) =>
+      println("can't find target, try again")
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(1 seconds, self, StartWork)
   }
 
-  def askTarget(): Actor.Receive = {
+  def active(target: ActorRef): Actor.Receive = {
     case FindTarget => target ! AreYouAlive
     case ImHere => println("target is alive")
+    case Terminated(`target`) =>
+      println("target is terminated, find it again!")
+      context.unbecome
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(1 seconds, self, StartWork)
     case other => println(s"other msg: $other")
   }
 
@@ -57,11 +72,11 @@ class TargetActor extends Actor {
 }
 
 object RemoteLearn extends App {
-  if (args(0) == "source"){
+  if (args(0) == "source") {
     println("start source ...")
     startSource
   }
-  else{
+  else {
     println("start target ...")
     startTarget
   }
@@ -77,7 +92,7 @@ object RemoteLearn extends App {
   def startTarget() {
     val root = ConfigFactory.load
     val targetConfig = root.getConfig("target").withFallback(root)
-    val system = ActorSystem("targetSystem",targetConfig )
+    val system = ActorSystem("targetSystem", targetConfig)
     system.actorOf(Props[TargetActor], "targetActor")
   }
 }
